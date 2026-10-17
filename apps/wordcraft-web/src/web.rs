@@ -31,6 +31,9 @@ pub fn start() {
         if let Err(e) = guard_unload(dirty.clone(), saves.clone()) {
             log::error!("no unsaved-changes guard: {e}");
         }
+        // `?host=kawan`: KawanEditor drives WordCraft from its parent page (`kawan`).
+        let kawan = crate::kawan::web::Bridge::from_url().map(Rc::new);
+        let app_kawan = kawan.clone();
         let mut options = eframe::WebOptions::default();
         if query().contains("webgl")
             && let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup
@@ -54,20 +57,27 @@ pub fn start() {
                     // The browser's locale picks the new document's paper, the units and the
                     // decimal separator (#838).
                     let region = wordcraft_ui_egui::i18n::system_region();
-                    let sample = query().contains("sample");
+                    let sample = app_kawan.is_none() && query().contains("sample");
                     let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
                     let mut session = Session::new(doc);
                     session.system_region = region;
-                    let mut app = WordApp::new(session, services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone()));
+                    let mut services = services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone());
+                    if let Some(k) = &app_kawan {
+                        crate::kawan::attach(&mut services, k, &cc.egui_ctx);
+                    }
+                    let mut app = WordApp::new(session, services);
                     app.autosave = false;
                     // No document to show: start on File › Home, as the desktop app does (#766).
-                    if !sample {
+                    if !sample && app_kawan.is_none() {
                         app.start_screen();
                     }
-                    Ok(Box::new(WebShell { app, inbox, saves }))
+                    Ok(Box::new(WebShell { app, inbox, saves, kawan: app_kawan }))
                 }),
             )
             .await;
+        if let (Err(e), Some(k)) = (&result, &kawan) {
+            k.post_start_failed(&format!("{e:?}"));
+        }
         if let Some(el) = document.get_element_by_id(LOADING_ID) {
             match result {
                 Ok(()) => el.remove(),
@@ -87,6 +97,7 @@ struct WebShell {
     app: WordApp,
     inbox: Inbox,
     saves: Rc<PickerSaves>,
+    kawan: Option<Rc<crate::kawan::web::Bridge>>,
 }
 
 /// Saves the browser's save picker finishes after `download` has returned (#728). The app marks
@@ -139,6 +150,9 @@ impl eframe::App for WebShell {
         }
         self.settle_picker_saves();
         self.app.logic(ctx);
+        if let Some(k) = &self.kawan {
+            k.tick(&mut crate::kawan::host::WordHost(&mut self.app));
+        }
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
