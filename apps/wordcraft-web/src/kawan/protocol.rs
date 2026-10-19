@@ -6,6 +6,9 @@
 
 use serde_json::{Value, json};
 
+// Engine forks re-export their engine crate's `kawan` module as `policy` (see their `mod.rs`).
+use super::policy::Policy;
+
 pub const PROTOCOL: u64 = 1;
 
 const NO_DOCUMENT: &str = "no document is open";
@@ -26,6 +29,7 @@ pub enum Classify {
     Save,
     /// A save of the document in another native format (DeckCraft's web Ctrl+S writes `.deckcraft`):
     /// re-serialize it in the save format.
+    #[allow(dead_code)] // only engines with such a format (deck) construct it
     Convert,
     /// A copy in another format (Export as PDF/CSV/PNG, Save As .odt…): handed to the page as is.
     Export,
@@ -52,6 +56,8 @@ pub trait Host {
     /// Changes on every document mutation; selection-only changes should not move it.
     fn revision(&self) -> u64;
     fn set_author(&mut self, name: &str);
+    /// The host page's policy, from `init` (upstream behaviour when it sent none).
+    fn set_policy(&mut self, _policy: Policy) {}
     fn classify(&self, name: &str) -> Classify;
     /// The app produced the save bytes itself (`Classify::Save`): mark the document saved, as
     /// far as the app's own save path has not already.
@@ -92,7 +98,6 @@ pub struct Protocol {
     /// A document from the page is open; until then the app shows a blank document that must
     /// never be handed to the page as a save.
     opened: bool,
-    policy: Value,
     last_dirty: Option<bool>,
     last_rev: Option<u64>,
     last_edited_ms: Option<f64>,
@@ -115,12 +120,6 @@ impl Protocol {
         Post::error(None, if gpu { "GPU_UNAVAILABLE" } else { "ENGINE_LOAD_FAILED" }, error)
     }
 
-    /// The policy from `init` (applied by the engine from Fase 3 on).
-    #[allow(dead_code)] // engine forks read it once the policy hooks land (Fase 3)
-    pub fn policy(&self) -> &Value {
-        &self.policy
-    }
-
     /// `msg` is the message object without `payload.bytes`; `bytes` is that field when present.
     pub fn handle(&mut self, msg: &Value, bytes: Option<Vec<u8>>, host: &mut dyn Host) -> Vec<Post> {
         let id = msg.get("id").and_then(Value::as_u64);
@@ -136,7 +135,7 @@ impl Protocol {
         let post = match kind {
             "init" => {
                 self.initialized = true;
-                self.policy = payload.get("policy").cloned().unwrap_or(Value::Null);
+                host.set_policy(parse_policy(payload.get("policy")));
                 let author = text("author");
                 if !author.trim().is_empty() {
                     host.set_author(author.trim());
@@ -231,6 +230,20 @@ impl Protocol {
     }
 }
 
+/// `PolicyJson` (spec §5.1) as the engine's [`Policy`]. Fields of the wrong type fall back to
+/// "unrestricted", so a malformed policy never locks the user out.
+pub fn parse_policy(v: Option<&Value>) -> Policy {
+    let strings = |key: &str| v.and_then(|v| v.get(key)).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>());
+    Policy {
+        read_only: v.and_then(|v| v.get("readOnly")).and_then(Value::as_bool).unwrap_or(false),
+        allow: strings("allow"),
+        deny: strings("deny").unwrap_or_default(),
+        hidden_tabs: strings("hiddenTabs").unwrap_or_default(),
+        mutating: Vec::new(),
+        queries: Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,6 +260,7 @@ mod tests {
         rev: u64,
         save_calls: u32,
         mark_calls: u32,
+        policy: Option<Policy>,
     }
 
     impl Host for FakeHost {
@@ -288,6 +302,9 @@ mod tests {
         }
         fn set_author(&mut self, name: &str) {
             self.author = name.to_string();
+        }
+        fn set_policy(&mut self, policy: Policy) {
+            self.policy = Some(policy);
         }
         fn classify(&self, name: &str) -> Classify {
             if name.ends_with(".pdf") {
@@ -357,7 +374,29 @@ mod tests {
         let post = one(p.handle(&msg("init", 1, json!({"policy": {"readOnly": false}, "author": "Salwa"})), None, &mut h));
         assert_eq!((post.id, post.kind), (Some(1), "initialized"));
         assert_eq!(h.author, "Salwa");
-        assert_eq!(p.policy()["readOnly"], false);
+    }
+
+    #[test]
+    fn init_hands_the_parsed_policy_to_the_host() {
+        let mut p = Protocol::new();
+        let mut h = FakeHost::default();
+        let policy = json!({"readOnly": true, "allow": ["a.*"], "deny": ["b"], "hiddenTabs": ["Review"], "theme": "dark"});
+        p.handle(&msg("init", 1, json!({ "policy": policy })), None, &mut h);
+        let strings = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let want = Policy { read_only: true, allow: Some(strings(&["a.*"])), deny: strings(&["b"]), hidden_tabs: strings(&["Review"]), ..Policy::default() };
+        assert_eq!(h.policy, Some(want));
+    }
+
+    #[test]
+    fn malformed_policy_falls_back_to_upstream() {
+        let mut p = Protocol::new();
+        let mut h = FakeHost::default();
+        p.handle(&msg("init", 1, json!({"policy": {"readOnly": "yes", "allow": "x", "deny": [1, "c"], "hiddenTabs": null}})), None, &mut h);
+        assert_eq!(h.policy, Some(Policy { deny: vec!["c".to_string()], ..Policy::default() }));
+        let mut p = Protocol::new();
+        let mut h = FakeHost::default();
+        p.handle(&msg("init", 1, json!({})), None, &mut h);
+        assert_eq!(h.policy, Some(Policy::default()));
     }
 
     #[test]

@@ -11,6 +11,7 @@ pub mod cmd;
 pub mod file_access;
 pub mod io;
 mod io_ext;
+pub mod kawan;
 pub mod keymap;
 pub mod math_gallery;
 pub mod print;

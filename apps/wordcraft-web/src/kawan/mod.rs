@@ -6,6 +6,9 @@ pub mod host;
 pub mod protocol;
 pub mod web;
 
+/// The canonical `policy.rs`, carried by the engine crate so its hooks can read it.
+pub use wordcraft_engine::kawan as policy;
+
 use wordcraft_ui_egui::Services;
 
 /// Route the app's downloads (Save, Save As, exports) through the bridge, wake the app when the

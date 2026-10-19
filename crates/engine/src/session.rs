@@ -1128,6 +1128,7 @@ impl Session {
         if let Some(why) = (spec.enabled)(self) {
             return Err(CmdError::Disabled(format!("{id}: {why}")));
         }
+        crate::kawan::allows(id, spec.mutates).map_err(|why| CmdError::Disabled(format!("{id}: {why}")))?;
         // Restrict Editing: refused outright, or allowed as long as it only edits the exceptions.
         let guard = if spec.mutates { crate::cmd::protect::check_before(self, id, params)? } else { false };
         if spec.mutates && self.doc.settings.protection.as_deref() == Some("trackedChanges") {

@@ -173,8 +173,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     // Format) may be stored while the selection moved away, and a tab may have been hidden.
     let user_tabs = app.session.ribbon.tabs().into_owned();
     let mut tabs: Vec<(String, bool)> = vec![("File".to_string(), false)];
-    tabs.extend(user_tabs.iter().filter(|e| !e.hidden).map(|e| (e.name.clone(), e.custom)));
-    for ct in contextual_tabs(&app.session) {
+    tabs.extend(user_tabs.iter().filter(|e| !e.hidden && !wordcraft_engine::kawan::tab_hidden(&e.name)).map(|e| (e.name.clone(), e.custom)));
+    for ct in contextual_tabs(&app.session).into_iter().filter(|t| !wordcraft_engine::kawan::tab_hidden(t)) {
         if ct == "Outlining" {
             tabs.insert(1.min(tabs.len()), (ct.to_string(), false));
         } else if !tabs.iter().any(|(n, _)| n == ct) {

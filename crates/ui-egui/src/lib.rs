@@ -694,6 +694,12 @@ impl WordApp {
             self.status(e.clone());
             return Err(e);
         }
+        // Also covers `ui.*` and the web's Save As / export downloads, which skip `Session::run`.
+        if let Err(why) = wordcraft_engine::kawan::allows(id, self.session.registry.get(id).is_some_and(|s| s.mutates)) {
+            let e = format!("{id}: {why}");
+            self.status(e.clone());
+            return Err(e);
+        }
         if let Some(r) = self.ui_command(id, &params) {
             return r;
         }

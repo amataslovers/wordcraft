@@ -88,8 +88,16 @@ fn keytip_badge(ui: &Ui, rect: Rect, id: &str, name: &str) {
     }
 }
 
+/// Whether the host's policy hides command `id` (KawanEditor).
+pub fn denied(app: &WordApp, id: &str) -> bool {
+    wordcraft_engine::kawan::allows(id, app.session.registry.get(id).is_some_and(|s| s.mutates)).is_err()
+}
+
 /// Whether a command exists and is enabled.
 pub fn enabled(app: &WordApp, id: &str) -> bool {
+    if denied(app, id) {
+        return false;
+    }
     // No document open (#1129): only what opens one, Help and the settings.
     if !app.has_document() && !crate::works_without_document(id) {
         return false;
@@ -159,6 +167,9 @@ pub fn label_line(ui: &Ui, cx: f32, y: f32, text: &str, font: egui::FontId, colo
 
 #[allow(clippy::too_many_arguments)]
 fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool, checked: bool) -> Response {
+    if denied(app, id) {
+        return ui.allocate_response(egui::Vec2::ZERO, Sense::hover());
+    }
     let label = tl!(label);
     let t = Tokens::get(ui.ctx());
     let galley_w =
@@ -187,6 +198,9 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
 
 /// A small button: 16 px icon with an optional label; `checked` draws the toggled state.
 pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, tip: &str, id: &str, params: Value, checked: bool) -> Response {
+    if denied(app, id) {
+        return ui.allocate_response(egui::Vec2::ZERO, Sense::hover());
+    }
     let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
     let t = Tokens::get(ui.ctx());
     let text_w = label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);

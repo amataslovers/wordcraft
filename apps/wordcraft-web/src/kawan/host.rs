@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use wordcraft_engine::cmd::insert::base64_encode;
 use wordcraft_ui_egui::WordApp;
 
+use super::policy::{self, Policy};
 use super::protocol::{Classify, CommandInfo, Host};
 
 pub struct WordHost<'a>(pub &'a mut WordApp);
@@ -30,7 +31,8 @@ impl WordHost<'_> {
 impl Host for WordHost<'_> {
     fn open(&mut self, name: &str, bytes: Vec<u8>) -> Result<(), String> {
         // `execute`, not `run`: never the Save Changes prompt for the blank start document.
-        self.0.execute("file.open", json!({"path": name, "data": base64_encode(&bytes)}))?;
+        // The bridge's own open: the host's command deny list does not apply to it.
+        policy::as_host(|| self.0.execute("file.open", json!({"path": name, "data": base64_encode(&bytes)})))?;
         self.0.ui.backstage = false;
         Ok(())
     }
@@ -55,6 +57,7 @@ impl Host for WordHost<'_> {
             .registry
             .all()
             .iter()
+            .filter(|c| policy::allows(c.id, c.mutates).is_ok())
             .map(|c| CommandInfo { id: c.id.to_string(), label: c.label.to_string(), menu: c.location.to_string(), mutates: c.mutates })
             .collect()
     }
@@ -69,6 +72,14 @@ impl Host for WordHost<'_> {
 
     fn set_author(&mut self, name: &str) {
         self.0.session.author = name.chars().take(200).collect();
+    }
+
+    fn set_policy(&mut self, mut p: Policy) {
+        // Hidden tabs stay hidden: Customize Ribbon could show them again.
+        if !p.hidden_tabs.is_empty() {
+            p.deny.push("tools.customizeRibbon".into());
+        }
+        policy::set(p);
     }
 
     fn classify(&self, name: &str) -> Classify {
