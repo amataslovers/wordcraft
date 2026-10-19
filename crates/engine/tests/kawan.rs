@@ -50,3 +50,33 @@ fn upstream_policy_changes_nothing() {
     s.run("text.insert", &json!({"text": "x"})).unwrap();
     assert_eq!(text(&s), "x");
 }
+
+#[test]
+fn read_only_refuses_undo_listed_as_mutating() {
+    let mut s = session();
+    s.run("text.insert", &json!({"text": "x"})).unwrap();
+    // `edit.undo` is pure in the registry; the bridge host lists it as mutating.
+    kawan::set(Policy { read_only: true, mutating: vec!["edit.undo".into(), "edit.repeat".into()], ..Policy::default() });
+    assert!(matches!(s.run("edit.undo", &json!({})), Err(CmdError::Disabled(_))));
+    assert!(matches!(s.run("edit.repeat", &json!({})), Err(CmdError::Disabled(_))));
+    assert_eq!(text(&s), "x");
+    kawan::set(Policy::default());
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(text(&s), "");
+}
+
+#[test]
+fn allow_and_deny_spare_the_queries_the_ribbon_reads() {
+    let mut s = session();
+    // The host knows nothing of `format.state`; the ribbon reads it every frame. The bridge host
+    // lists such queries in `Policy::queries`.
+    let queries = vec!["format.state".to_string(), "file.info".to_string()];
+    kawan::set(Policy { allow: Some(vec!["text.insert".into()]), queries: queries.clone(), ..Policy::default() });
+    assert!(s.run("format.state", &json!({})).is_ok());
+    assert!(s.run("file.info", &json!({})).is_ok());
+    assert!(matches!(s.run("format.bold", &json!({})), Err(CmdError::Disabled(_))));
+    kawan::set(Policy { deny: vec!["format.*".into()], queries, ..Policy::default() });
+    assert!(s.run("format.state", &json!({})).is_ok());
+    assert!(matches!(s.run("format.bold", &json!({})), Err(CmdError::Disabled(_))));
+    kawan::set(Policy::default());
+}

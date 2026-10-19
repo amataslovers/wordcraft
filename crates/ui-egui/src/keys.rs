@@ -220,7 +220,7 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                 }
                 egui::Event::Copy => {
                     let selected = app.session.selected_text();
-                    if !selected.is_empty() {
+                    if !selected.is_empty() && wordcraft_engine::kawan::allows("edit.copy", false).is_ok() {
                         ctx.copy_text(selected);
                     }
                 }

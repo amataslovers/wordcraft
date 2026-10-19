@@ -7,6 +7,15 @@ use wordcraft_ui_egui::WordApp;
 use super::policy::{self, Policy};
 use super::protocol::{Classify, CommandInfo, Host};
 
+/// Commands that change the document although the registry marks them pure, or replace it with
+/// another one (a save would then hand that one to the page under this document's key),
+/// and the user's own saves: view mode saves nothing.
+const ALSO_MUTATING: &[&str] =
+    &["edit.undo", "edit.redo", "edit.undoTo", "edit.repeat", "tools.macros", "tools.recordMacro", "file.new*", "file.open", "file.close", "file.recover", "file.save*", "file.encrypt", "file.versions"];
+
+/// State queries and selection moves the UI runs on its own; the host's lists skip them.
+const QUERIES: &[&str] = &["format.state", "file.info", "equation.get", "list.get", "review.wordCount", "select.*", "caret.set"];
+
 pub struct WordHost<'a>(pub &'a mut WordApp);
 
 impl WordHost<'_> {
@@ -75,11 +84,17 @@ impl Host for WordHost<'_> {
     }
 
     fn set_policy(&mut self, mut p: Policy) {
+        p.mutating = ALSO_MUTATING.iter().map(|s| s.to_string()).collect();
+        p.queries = QUERIES.iter().map(|s| s.to_string()).collect();
         // Hidden tabs stay hidden: Customize Ribbon could show them again.
         if !p.hidden_tabs.is_empty() {
             p.deny.push("tools.customizeRibbon".into());
         }
+        let read_only = p.read_only;
         policy::set(p);
+        if read_only {
+            let _ = self.0.execute("view.readMode", json!({}));
+        }
     }
 
     fn classify(&self, name: &str) -> Classify {
