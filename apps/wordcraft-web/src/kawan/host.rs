@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use wordcraft_engine::cmd::insert::base64_encode;
 use wordcraft_ui_egui::WordApp;
 
-use super::policy::{self, Policy};
+use super::policy::{self, Policy, Theme};
 use super::protocol::{Classify, CommandInfo, Host};
 
 /// Commands that change the document although the registry marks them pure, or replace it with
@@ -17,6 +17,15 @@ const ALSO_MUTATING: &[&str] =
 const QUERIES: &[&str] = &["format.state", "file.info", "equation.get", "list.get", "review.wordCount", "select.*", "caret.set"];
 
 pub struct WordHost<'a>(pub &'a mut WordApp);
+
+/// WordCraft's `ui.theme` value for the host's colour scheme (`System` follows the browser, live).
+fn theme_value(theme: Theme) -> &'static str {
+    match theme {
+        Theme::System => "system",
+        Theme::Light => "light",
+        Theme::Dark => "dark",
+    }
+}
 
 impl WordHost<'_> {
     /// What Save writes: the open file's own Word format (a .docm keeps its macros), otherwise .docx.
@@ -90,8 +99,10 @@ impl Host for WordHost<'_> {
         if !p.hidden_tabs.is_empty() {
             p.deny.push("tools.customizeRibbon".into());
         }
-        let read_only = p.read_only;
+        let (read_only, theme) = (p.read_only, p.theme);
         policy::set(p);
+        // Always, `System` too; the next frame re-applies the theme with the host accent.
+        let _ = policy::as_host(|| self.0.execute("ui.theme", json!({"value": theme_value(theme)})));
         if read_only {
             let _ = self.0.execute("view.readMode", json!({}));
         }
@@ -106,5 +117,23 @@ impl Host for WordHost<'_> {
     fn mark_saved(&mut self) {
         // The app's own save path already cleared `dirty` when the download hook returned Ok.
         self.0.session.dirty = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wordcraft_engine::Session;
+    use wordcraft_ui_egui::Services;
+
+    #[test]
+    fn theme_value_maps_the_host_scheme() {
+        assert_eq!(theme_value(Theme::System), "system");
+        assert_eq!(theme_value(Theme::Light), "light");
+        assert_eq!(theme_value(Theme::Dark), "dark");
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        for theme in [Theme::System, Theme::Light, Theme::Dark] {
+            assert!(app.execute("ui.theme", json!({"value": theme_value(theme)})).is_ok(), "ui.theme takes {}", theme_value(theme));
+        }
     }
 }

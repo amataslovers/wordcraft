@@ -1401,7 +1401,7 @@ impl WordApp {
             },
             other => other,
         };
-        if self.applied_theme != Some(effective) {
+        if crate::kawan_brand::policy_changed(ctx) || self.applied_theme != Some(effective) {
             theme::apply(ctx, effective);
             self.applied_theme = Some(effective);
         }

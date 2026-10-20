@@ -53,6 +53,32 @@ fn denied_button_is_not_drawn() {
     kawan::set(Policy::default());
 }
 
+fn selection_stroke(h: &egui_kittest::Harness<'static, WordApp>) -> egui::Color32 {
+    h.ctx.global_style().visuals.selection.stroke.color
+}
+
+#[test]
+fn host_accent_reaches_visuals() {
+    kawan::set(Policy::default());
+    let mut h = harness();
+    assert_eq!(selection_stroke(&h), egui::Color32::from_rgb(0x3B, 0x5B, 0xDB), "WordCraft's own accent without a host accent");
+    // A policy arriving after start-up (the bridge's init) re-applies the theme.
+    let accent = egui::Color32::from_rgb(0xE1, 0x1D, 0x48);
+    kawan::set(Policy { accent: Some([0xE1, 0x1D, 0x48]), ..Policy::default() });
+    h.run_steps(4);
+    assert_eq!(selection_stroke(&h), accent);
+    assert_eq!(h.ctx.global_style().visuals.hyperlink_color, egui::Color32::from_rgb(180, 23, 58), "accent_text, light");
+    assert_eq!(wordcraft_ui_egui::theme::Tokens::get(&h.ctx).accent, accent, "every Tokens::get caller");
+    // What the bridge does on init: the host's theme.
+    h.state_mut().execute("ui.theme", json!({"value": "dark"})).unwrap();
+    h.run_steps(4);
+    assert_eq!(selection_stroke(&h), accent);
+    assert_eq!(h.ctx.global_style().visuals.hyperlink_color, egui::Color32::from_rgb(234, 97, 127), "accent_text, dark");
+    kawan::set(Policy::default());
+    h.run_steps(4);
+    assert_eq!(h.ctx.global_style().visuals.hyperlink_color, egui::Color32::from_rgb(0x9C, 0xB0, 0xF5), "WordCraft's own dark accent text again");
+}
+
 /// No ArtCraft mark and no community link; the attribution sentence of the About line is allowed.
 /// A `Role::Label` node (`ui.label`) keeps its text in `value`, every other node in `label`.
 fn no_artcraft(h: &egui_kittest::Harness<'static, WordApp>, place: &str) {

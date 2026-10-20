@@ -1,9 +1,12 @@
-//! KawanEditor branding (logo, About line) for the WordCraft UI. WordCraft's own UI calls these
-//! at a few hook points; everything here reads the host policy (`wordcraft_engine::kawan`) and
-//! falls back to KawanEditor's default logo.
+//! KawanEditor branding (logo, About line) and the host's accent colour for the WordCraft UI.
+//! WordCraft's own UI calls these at a few hook points; everything here reads the host policy
+//! (`wordcraft_engine::kawan`) and falls back to KawanEditor's default logo and WordCraft's own
+//! colours.
 
-use egui::{Sense, vec2};
+use egui::{Color32, Sense, vec2};
 use wordcraft_engine::kawan as policy;
+
+use crate::theme::Tokens;
 
 /// The default logo: KawanEditor's mark, 256 x 256.
 const DEFAULT_LOGO: &[u8] = include_bytes!("../assets/kawan-logo.png");
@@ -85,9 +88,106 @@ pub fn about() -> String {
     policy::about("WordCraft")
 }
 
+/// The File tab's side panel: WordCraft's fixed app colour (in both themes), or the host accent.
+pub fn app_color() -> Color32 {
+    policy::accent().map_or(crate::theme::APP_COLOR, rgb)
+}
+
+/// True once per new host policy: the frame that sees it re-applies the theme (the accent).
+pub fn policy_changed(ctx: &egui::Context) -> bool {
+    let generation = policy::generation();
+    ctx.data_mut(|d| std::mem::replace(d.get_temp_mut_or(egui::Id::new("kawan-generation"), generation), generation) != generation)
+}
+
+fn rgb(c: [u8; 3]) -> Color32 {
+    Color32::from_rgb(c[0], c[1], c[2])
+}
+
+/// WordCraft's tokens with the host accent: the accent, its text colour on panels, the text on
+/// top of it, the checked wash (blended from the panel colour) and the selection. Unchanged
+/// without an accent.
+pub fn tint(t: Tokens) -> Tokens {
+    match policy::accent() {
+        Some(a) => tint_with(t, a),
+        None => t,
+    }
+}
+
+fn tint_with(mut t: Tokens, a: [u8; 3]) -> Tokens {
+    let s = [t.panel.r(), t.panel.g(), t.panel.b()];
+    let (text, checked, alpha) = if t.dark {
+        (policy::mix(a, [255; 3], 0.30), policy::mix(s, a, 0.30), 0x55)
+    } else {
+        (policy::mix(a, [0; 3], 0.20), policy::mix(s, a, 0.15), 0x48)
+    };
+    t.accent = rgb(a);
+    t.accent_text = rgb(text);
+    t.on_accent = rgb(policy::on_color(a));
+    t.checked = rgb(checked);
+    t.selection = Color32::from_rgba_unmultiplied(a[0], a[1], a[2], alpha);
+    t
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn with_accent(accent: Option<[u8; 3]>) {
+        policy::set(policy::Policy { accent, ..policy::Policy::default() });
+    }
+
+    #[test]
+    fn tint_is_identity_without_accent() {
+        with_accent(None);
+        for t in [Tokens::light(), Tokens::dark()] {
+            assert_eq!(format!("{:?}", tint(t)), format!("{t:?}"));
+        }
+        assert_eq!(app_color(), crate::theme::APP_COLOR);
+    }
+
+    #[test]
+    fn tint_replaces_the_accent_family() {
+        let a = [0xE1, 0x1D, 0x48];
+        with_accent(Some(a));
+        let light = tint(Tokens::light());
+        assert_eq!(light.accent, rgb(a));
+        assert_eq!(light.accent_text, rgb([180, 23, 58]));
+        assert_eq!(light.on_accent, rgb([255, 255, 255]));
+        assert_eq!(light.checked, rgb([246, 217, 223]));
+        assert_eq!(light.selection, Color32::from_rgba_unmultiplied(0xE1, 0x1D, 0x48, 0x48));
+        let dark = tint(Tokens::dark());
+        assert_eq!(dark.accent, rgb(a));
+        assert_eq!(dark.accent_text, rgb([234, 97, 127]));
+        assert_eq!(dark.on_accent, rgb([255, 255, 255]));
+        assert_eq!(dark.checked, rgb([94, 35, 48]));
+        assert_eq!(dark.selection, Color32::from_rgba_unmultiplied(0xE1, 0x1D, 0x48, 0x55));
+        // Everything else stays WordCraft's.
+        assert_eq!(dark.panel, Tokens::dark().panel);
+        assert_eq!(light.hover, Tokens::light().hover);
+        assert_eq!(app_color(), rgb(a));
+        with_accent(None);
+    }
+
+    #[test]
+    fn on_accent_is_readable() {
+        with_accent(Some([0xFF, 0xFF, 0x00]));
+        for t in [tint(Tokens::light()), tint(Tokens::dark())] {
+            assert_eq!(t.on_accent, rgb([17, 17, 17]));
+        }
+        with_accent(None);
+    }
+
+    #[test]
+    fn policy_changed_fires_once_per_policy() {
+        let ctx = egui::Context::default();
+        with_accent(None);
+        assert!(!policy_changed(&ctx), "the first look only records the generation");
+        assert!(!policy_changed(&ctx));
+        with_accent(Some([1, 2, 3]));
+        assert!(policy_changed(&ctx));
+        assert!(!policy_changed(&ctx));
+        with_accent(None);
+    }
 
     #[test]
     fn bad_host_png_falls_back_to_default() {
