@@ -7,7 +7,7 @@
 use serde_json::{Value, json};
 
 // Engine forks re-export their engine crate's `kawan` module as `policy` (see their `mod.rs`).
-use super::policy::Policy;
+use super::policy::{MAX_LOGO_BYTES, Policy, Theme, is_png, parse_hex, window_title};
 
 pub const PROTOCOL: u64 = 1;
 
@@ -102,6 +102,9 @@ pub struct Protocol {
     last_rev: Option<u64>,
     last_edited_ms: Option<f64>,
     edited_pending: bool,
+    /// Name of the last successfully opened document.
+    name: String,
+    title_sent: Option<String>,
 }
 
 impl Protocol {
@@ -135,7 +138,9 @@ impl Protocol {
         let post = match kind {
             "init" => {
                 self.initialized = true;
-                host.set_policy(parse_policy(payload.get("policy")));
+                let mut policy = parse_policy(payload.get("policy"));
+                policy.logo_png = bytes.filter(|b| is_png(b) && b.len() <= MAX_LOGO_BYTES).map(Into::into);
+                host.set_policy(policy);
                 let author = text("author");
                 if !author.trim().is_empty() {
                     host.set_author(author.trim());
@@ -147,6 +152,7 @@ impl Protocol {
                 Some(bytes) => match host.open(&text("name"), bytes) {
                     Ok(()) => {
                         self.opened = true;
+                        self.name = text("name");
                         Post::new(id, "opened", json!({}))
                     }
                     Err(e) => Post::error(id, "OPEN_FAILED", e),
@@ -183,6 +189,15 @@ impl Protocol {
             other => Post::error(id, "UNKNOWN_MESSAGE", format!("unknown message type {other:?}")),
         };
         vec![post]
+    }
+
+    /// The window title for the open document, once per change of its name.
+    pub fn take_title(&mut self) -> Option<String> {
+        if !self.opened || self.title_sent.as_deref() == Some(&self.name) {
+            return None;
+        }
+        self.title_sent = Some(self.name.clone());
+        Some(window_title(&self.name))
     }
 
     /// Once per frame: files the app tried to download leave as `saved` (a save of the document,
@@ -241,6 +256,19 @@ pub fn parse_policy(v: Option<&Value>) -> Policy {
         hidden_tabs: strings("hiddenTabs").unwrap_or_default(),
         mutating: Vec::new(),
         queries: Vec::new(),
+        theme: match v.and_then(|v| v.get("theme")).and_then(Value::as_str) {
+            Some("light") => Theme::Light,
+            Some("dark") => Theme::Dark,
+            _ => Theme::System,
+        },
+        accent: v.and_then(|v| v.get("accent")).and_then(Value::as_str).and_then(parse_hex),
+        logo_png: None,
+        logo_href: v
+            .and_then(|v| v.get("logo"))
+            .and_then(|l| l.get("href"))
+            .and_then(Value::as_str)
+            .filter(|h| h.strip_prefix("https://").or_else(|| h.strip_prefix("http://")).is_some_and(|rest| !rest.is_empty()))
+            .map(str::to_string),
     }
 }
 
@@ -383,7 +411,7 @@ mod tests {
         let policy = json!({"readOnly": true, "allow": ["a.*"], "deny": ["b"], "hiddenTabs": ["Review"], "theme": "dark"});
         p.handle(&msg("init", 1, json!({ "policy": policy })), None, &mut h);
         let strings = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let want = Policy { read_only: true, allow: Some(strings(&["a.*"])), deny: strings(&["b"]), hidden_tabs: strings(&["Review"]), ..Policy::default() };
+        let want = Policy { read_only: true, allow: Some(strings(&["a.*"])), deny: strings(&["b"]), hidden_tabs: strings(&["Review"]), theme: Theme::Dark, ..Policy::default() };
         assert_eq!(h.policy, Some(want));
     }
 
@@ -595,5 +623,67 @@ mod tests {
         assert_eq!(edited(p.tick(200.0, vec![], &mut h)), 0);
         assert_eq!(edited(p.tick(260.0, vec![], &mut h)), 1, "held edit flushes after 250 ms");
         assert_eq!(edited(p.tick(600.0, vec![], &mut h)), 0, "no change, no event");
+    }
+
+    const PNG_SIG: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+    fn init_with(policy: Value, bytes: Option<Vec<u8>>) -> Policy {
+        let mut p = Protocol::new();
+        let mut h = FakeHost::default();
+        p.handle(&msg("init", 1, json!({ "policy": policy })), bytes, &mut h);
+        h.policy.unwrap_or_default()
+    }
+
+    #[test]
+    fn init_parses_theme_accent_and_logo() {
+        let mut bytes = PNG_SIG.to_vec();
+        bytes.extend([0u8; 8]);
+        let policy = init_with(json!({"theme": "dark", "accent": "#E11D48", "logo": {"href": "https://example.com/"}}), Some(bytes));
+        assert_eq!(policy.theme, Theme::Dark);
+        assert_eq!(policy.accent, Some([0xE1, 0x1D, 0x48]));
+        assert_eq!(policy.logo_href.as_deref(), Some("https://example.com/"));
+        assert_eq!(policy.logo_png.map(|l| l.len()), Some(16));
+    }
+
+    #[test]
+    fn init_ignores_non_png_or_oversized_logo() {
+        assert!(init_with(json!({}), Some(b"<html>".to_vec())).logo_png.is_none());
+        let mut big = PNG_SIG.to_vec();
+        big.extend(vec![0u8; MAX_LOGO_BYTES]);
+        assert!(init_with(json!({}), Some(big)).logo_png.is_none());
+        let mut exact = PNG_SIG.to_vec();
+        exact.extend(vec![0u8; MAX_LOGO_BYTES - PNG_SIG.len()]);
+        assert_eq!(init_with(json!({}), Some(exact)).logo_png.map(|l| l.len()), Some(MAX_LOGO_BYTES));
+    }
+
+    #[test]
+    fn init_keeps_only_http_logo_href() {
+        for bad in [json!("javascript:alert(1)"), json!("/rel"), json!(5), json!("http://"), json!("https://")] {
+            assert_eq!(init_with(json!({"logo": {"href": bad}}), None).logo_href, None);
+        }
+        assert_eq!(init_with(json!({"logo": {"href": "http://a"}}), None).logo_href.as_deref(), Some("http://a"));
+    }
+
+    #[test]
+    fn malformed_theme_and_accent_fall_back() {
+        let policy = init_with(json!({"theme": "blue", "accent": "red"}), None);
+        assert_eq!((policy.theme, policy.accent), (Theme::System, None));
+        let mut p = Protocol::new();
+        let mut h = FakeHost::default();
+        p.handle(&msg("init", 1, json!({})), None, &mut h);
+        assert_eq!(h.policy, Some(Policy::default()));
+    }
+
+    #[test]
+    fn open_sets_the_title_once() {
+        let (mut p, mut h) = ready();
+        assert_eq!(p.take_title(), None);
+        h.open_err = Some("bad".into());
+        p.handle(&msg("open", 2, json!({"name": "Bad.docx"})), Some(vec![1]), &mut h);
+        assert_eq!(p.take_title(), None);
+        h.open_err = None;
+        p.handle(&msg("open", 3, json!({"name": "Laporan.docx"})), Some(vec![1]), &mut h);
+        assert_eq!(p.take_title().as_deref(), Some("Laporan.docx — KawanEditor"));
+        assert_eq!(p.take_title(), None);
     }
 }

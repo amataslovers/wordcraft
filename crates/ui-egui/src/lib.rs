@@ -55,6 +55,7 @@ pub mod frame;
 pub mod i18n;
 pub mod icons;
 pub mod ink;
+pub mod kawan_brand;
 pub mod keys;
 pub mod keytips;
 pub mod mini_toolbar;
@@ -1178,7 +1179,6 @@ impl WordApp {
                 ));
             }
             "ui.discord" => {
-                self.canvas.open_url = Some("https://discord.gg/artcraft".into());
                 json!({})
             }
             "ui.caretAnimation" => {
@@ -3317,7 +3317,7 @@ mod tests {
                 a,
             );
             h.run_steps(4);
-            assert!(h.query_by_label("Show the community button in the title bar").is_some(), "hook {hook}: the Options page rendered");
+            assert!(h.query_by_label("Show the mini toolbar when text is selected").is_some(), "hook {hook}: the Options page rendered");
             assert_eq!(h.query_by_label(LABEL).is_some(), hook, "hook {hook}: the button");
             if hook {
                 h.get_by_label(LABEL).click();

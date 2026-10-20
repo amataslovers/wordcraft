@@ -108,6 +108,12 @@ impl Bridge {
         for post in protocol.tick(js_sys::Date::now(), outbox, host) {
             self.post(post);
         }
+        // Look up the document only when a title is pending (the chain is lazy).
+        if let Some(title) = protocol.take_title()
+            && let Some(document) = web_sys::window().and_then(|w| w.document())
+        {
+            document.set_title(&title);
+        }
     }
 
     fn post(&self, post: Post) {
